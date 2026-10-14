@@ -62,3 +62,26 @@ Var pid
 
   dsh_installer_app_stopped:
 !macroend
+
+; Chromium starts its GPU and renderer processes under a sandbox token that must
+; read the install tree through ALL RESTRICTED APPLICATION PACKAGES
+; (S-1-15-2-2). The default ACL inherited under %LOCALAPPDATA%\Programs or a
+; custom directory such as D:\apps normally passes, but when another tool has
+; left an unresolvable AppContainer SID (S-1-15-2-*) on a parent directory the
+; same check fails: every sandboxed child dies with 0x80000003 while it maps
+; ICU data, the GPU process restarts until Chromium exits, and no window ever
+; appears (#1366, #333, electron/electron#51761). Chrome's installer grants this
+; read access for the same reason. One inheritable ACE on $INSTDIR reaches every
+; installed file; it adds read/execute only and removes nothing.
+!macro customInstall
+  Push $0
+  DetailPrint "Granting sandbox read access to $INSTDIR"
+  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$INSTDIR" /grant "*S-1-15-2-2:(OI)(CI)(RX)" /C /Q'
+  Pop $0
+  ${if} $0 != 0
+    ; Never fail the install over this: the app still starts on machines whose
+    ; inherited ACL is clean, which is almost all of them.
+    DetailPrint "Could not grant sandbox read access (icacls result: $0)"
+  ${endIf}
+  Pop $0
+!macroend

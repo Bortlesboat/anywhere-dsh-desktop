@@ -34,3 +34,37 @@ describe('Windows NSIS running-app handoff', () => {
     expect(script).not.toContain('getProcessInfo.nsh')
   })
 })
+
+describe('Windows NSIS sandbox read access', () => {
+  const customInstall = (): string => {
+    const script = readFileSync(join(process.cwd(), 'build', 'installer.nsh'), 'utf8')
+    const start = script.indexOf('!macro customInstall')
+    expect(start).toBeGreaterThanOrEqual(0)
+    const end = script.indexOf('!macroend', start)
+    expect(end).toBeGreaterThan(start)
+    return script.slice(start, end)
+  }
+
+  it('grants ALL RESTRICTED APPLICATION PACKAGES inheritable read access on the install root (#1366)', () => {
+    const body = customInstall()
+
+    // System icacls, not whatever icacls.exe happens to be on PATH.
+    expect(body).toContain('"$SYSDIR\\icacls.exe" "$INSTDIR"')
+    expect(body).toContain('/grant "*S-1-15-2-2:(OI)(CI)(RX)"')
+    expect(body).toContain('nsExec::ExecToLog')
+  })
+
+  it('only adds read access and never blocks the install', () => {
+    const body = customInstall()
+
+    // One inheritable ACE on the root reaches every file; /T would stamp an
+    // explicit copy onto each of the ~26k installed files instead.
+    expect(body).not.toMatch(/\/T\b/)
+    // Repair is additive: never reset or strip ACLs the user or another tool owns.
+    expect(body).not.toMatch(/\/(reset|remove|deny|inheritance|setintegritylevel)\b/i)
+    expect(body).not.toMatch(/\b(Abort|Quit)\b/)
+    // The scratch register is restored for the builder code that follows.
+    expect(body.indexOf('Push $0')).toBeLessThan(body.indexOf('nsExec::ExecToLog'))
+    expect(body.trimEnd().endsWith('Pop $0')).toBe(true)
+  })
+})
